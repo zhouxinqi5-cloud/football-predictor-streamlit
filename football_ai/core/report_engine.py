@@ -50,6 +50,10 @@ class ReportEngine:
         league_name = display_league_name(fixture.league, fixture.competition_code)
         if fixture.source == "football-data":
             fixture_source = "Football-Data API（真实赛程数据）"
+        elif fixture.source == "thesportsdb":
+            fixture_source = "TheSportsDB 免费 API（真实赛程数据，免费返回数量可能受限）"
+        elif fixture.source == "openligadb":
+            fixture_source = "OpenLigaDB 免费 API（真实赛程数据，当前用于部分德国联赛）"
         elif fixture.source == "manual":
             fixture_source = "用户手动输入；基本面统计可能使用离线计算代理"
         else:

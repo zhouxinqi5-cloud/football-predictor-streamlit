@@ -7,8 +7,10 @@ from datetime import date
 from typing import Iterable, List, Optional
 
 from football_ai.config import MatchFixture
-from football_ai.data.api_client import ApiClient
+from football_ai.data.football_data_client import FootballDataClient
 from football_ai.data.mock_data import MockDataProvider
+from football_ai.data.openligadb_client import OpenLigaDBClient
+from football_ai.data.thesportsdb_client import TheSportsDBClient
 from football_predictor.data_fetcher import FootballDataError
 
 
@@ -19,16 +21,20 @@ class MatchLoadResult:
     source: str
     api_configured: bool
     fallback_reason: Optional[str] = None
+    failures: tuple[str, ...] = ()
 
     @property
     def is_real_data(self) -> bool:
-        return self.source == "football-data"
+        return self.source in {"football-data", "thesportsdb", "openligadb"}
 
 
 class MatchLoader:
-    def __init__(self, api_key: Optional[str] = None) -> None:
-        self.api = ApiClient(api_key=api_key)
+    def __init__(self, api_key: Optional[str] = None, enable_fallback_apis: bool = True) -> None:
+        self.football_data = FootballDataClient(api_key=api_key)
+        self.thesportsdb = TheSportsDBClient()
+        self.openligadb = OpenLigaDBClient()
         self.mock = MockDataProvider()
+        self.enable_fallback_apis = enable_fallback_apis
 
     def load(
         self,
@@ -44,26 +50,47 @@ class MatchLoader:
     ) -> MatchLoadResult:
         target = target_date or date.today()
         codes = tuple(competition_codes or ("PL", "PD", "BL1", "SA", "FL1"))
-        if self.api.available:
+        failures: List[str] = []
+        if self.football_data.available:
             try:
                 return MatchLoadResult(
-                    fixtures=self.api.fixtures(target, codes),
+                    fixtures=self.football_data.get_matches_by_date(target, codes),
                     target_date=target,
                     source="football-data",
                     api_configured=True,
                 )
             except FootballDataError as exc:
+                failures.append(f"Football-Data: {exc}")
+        else:
+            failures.append("Football-Data: 未配置 FOOTBALL_DATA_API_KEY")
+        if self.enable_fallback_apis:
+            try:
                 return MatchLoadResult(
-                    fixtures=self.mock.fixtures(target, codes),
+                    fixtures=self.thesportsdb.get_matches_by_date(target, codes),
                     target_date=target,
-                    source="mock",
-                    api_configured=True,
-                    fallback_reason=str(exc),
+                    source="thesportsdb",
+                    api_configured=self.football_data.available,
+                    failures=tuple(failures),
                 )
+            except FootballDataError as exc:
+                failures.append(f"TheSportsDB: {exc}")
+            try:
+                return MatchLoadResult(
+                    fixtures=self.openligadb.get_matches_by_date(target, codes),
+                    target_date=target,
+                    source="openligadb",
+                    api_configured=self.football_data.available,
+                    failures=tuple(failures),
+                )
+            except FootballDataError as exc:
+                failures.append(f"OpenLigaDB: {exc}")
+        else:
+            failures.append("备用真实 API：当前环境已禁用外部请求")
         return MatchLoadResult(
             fixtures=self.mock.fixtures(target, codes),
             target_date=target,
             source="mock",
-            api_configured=False,
-            fallback_reason="未配置 FOOTBALL_DATA_API_KEY",
+            api_configured=self.football_data.available,
+            fallback_reason="；".join(failures),
+            failures=tuple(failures),
         )

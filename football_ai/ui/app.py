@@ -37,6 +37,11 @@ def _secret(name: str) -> str:
         return ""
 
 
+def _match_loader(api_key: str) -> MatchLoader:
+    disabled = os.getenv("FOOTBALL_AI_DISABLE_EXTERNAL_APIS", "").strip().lower() in {"1", "true", "yes"}
+    return MatchLoader(api_key=api_key or None, enable_fallback_apis=not disabled)
+
+
 def _initialize(api_key: str) -> None:
     defaults = {
         "pro_fixtures": [],
@@ -50,9 +55,7 @@ def _initialize(api_key: str) -> None:
         if key not in st.session_state:
             st.session_state[key] = value
     if st.session_state.pro_load_result is None:
-        load_result = MatchLoader(api_key=api_key or None).load_with_status(
-            date.today(), ["PL", "PD", "BL1", "SA", "FL1"]
-        )
+        load_result = _match_loader(api_key).load_with_status(date.today(), ["ALL"])
         st.session_state.pro_load_result = load_result
         st.session_state.pro_fixtures = load_result.fixtures
         st.session_state.pro_fixture = load_result.fixtures[0]
@@ -202,7 +205,7 @@ def _auto_mode(competition_codes: Iterable[str]) -> tuple[MatchFixture, OddsInpu
     st.markdown(f"**当前查询日期：{query_date:%Y-%m-%d}**")
     if fetch_clicked or refresh_today:
         with st.spinner("正在读取赛程；API 不可用时自动切换 mock 数据..."):
-            load_result = MatchLoader(api_key=_secret("FOOTBALL_DATA_API_KEY") or None).load_with_status(
+            load_result = _match_loader(_secret("FOOTBALL_DATA_API_KEY")).load_with_status(
                 query_date, selected_codes or ["PL"]
             )
         st.session_state.pro_load_result = load_result
@@ -215,16 +218,49 @@ def _auto_mode(competition_codes: Iterable[str]) -> tuple[MatchFixture, OddsInpu
     fixtures = st.session_state.pro_fixtures
     load_result: MatchLoadResult = st.session_state.pro_load_result
     if load_result.is_real_data:
+        source_labels = {
+            "football-data": "Football-Data.org",
+            "thesportsdb": "TheSportsDB",
+            "openligadb": "OpenLigaDB",
+        }
         st.success(
-            f"当前使用真实 API 数据。查询日期：{load_result.target_date:%Y-%m-%d}，"
+            f"当前使用 {source_labels.get(load_result.source, load_result.source)} 真实 API 数据。"
+            f"查询日期：{load_result.target_date:%Y-%m-%d}，"
             f"共获取 {len(load_result.fixtures)} 场比赛。"
         )
+        if load_result.source == "thesportsdb":
+            st.caption("TheSportsDB 免费接口可能限制单次返回数量，列表不一定覆盖当天全部赛事。")
+        if load_result.failures:
+            with st.expander("查看上游数据源回退记录"):
+                for failure in load_result.failures:
+                    st.write(f"- {failure}")
     else:
         if load_result.api_configured and load_result.fallback_reason:
-            st.error(f"Football-Data API 请求失败：{load_result.fallback_reason}")
+            st.error(f"真实 API 获取失败：{load_result.fallback_reason}")
+        elif not load_result.api_configured:
+            st.warning("当前未配置免费 API Key，且免费备用接口未返回比赛，正在使用模拟数据。")
         st.warning("当前使用的是模拟示例数据，不是真实近期比赛。")
         st.caption(f"模拟数据对应查询日期：{load_result.target_date:%Y-%m-%d}，仅用于演示模型流程。")
     if fixtures:
+        st.dataframe(
+            [
+                {
+                    "比赛时间": item.kickoff_time.strftime("%Y-%m-%d %H:%M"),
+                    "赛事": display_league_name(item.league, item.competition_code),
+                    "主队": display_team_name(item.home_team),
+                    "客队": display_team_name(item.away_team),
+                    "数据来源": {
+                        "football-data": "Football-Data.org",
+                        "thesportsdb": "TheSportsDB",
+                        "openligadb": "OpenLigaDB",
+                        "mock": "模拟示例",
+                    }.get(item.source, item.source),
+                }
+                for item in fixtures
+            ],
+            width="stretch",
+            hide_index=True,
+        )
         fixture = st.selectbox("选择比赛", fixtures, format_func=lambda item: item.label, key="auto_fixture")
         st.session_state.pro_fixture = fixture
     else:
@@ -310,17 +346,18 @@ def main() -> None:
     st.title("Pro Football Analytics Engine")
     st.caption("职业级足球量化分析系统 · API + 计算 · 无网页爬虫 · 无付费服务强依赖")
     st.warning("仅用于数据分析、概率研究和学习，不构成投注建议，不保证预测准确率。")
-    api_status = "已配置，优先读取真实赛程" if api_key else "未配置，当前只能使用模拟示例数据"
+    api_status = "已配置，优先读取真实赛程" if api_key else "未配置，将尝试 TheSportsDB / OpenLigaDB 免费备用源"
     st.sidebar.markdown(f"**Football-Data API：** {api_status}")
     if not api_key:
-        st.sidebar.warning("要读取真实比赛，请在 Streamlit Cloud Secrets 或 .env 中配置：")
+        st.sidebar.warning("建议配置免费 Key，以获得更完整的赛程、积分榜和近期战绩：")
         st.sidebar.code('FOOTBALL_DATA_API_KEY = "你的 API Key"', language="toml")
         st.sidebar.caption("配置后重新启动应用，再点击“刷新今日比赛”。")
-    st.sidebar.caption("ODDS_API_KEY 为后续接口预留；当前赔率支持手动输入或离线基线。")
+    st.sidebar.markdown("**备用真实数据：** TheSportsDB → OpenLigaDB")
+    st.sidebar.caption("备用源无需私有 Key，但覆盖范围和免费返回数量有限。ODDS_API_KEY 仅为后续接口预留。")
 
     mode = st.radio("分析模式", ["自动模式", "手动模式"], horizontal=True)
     if mode == "自动模式":
-        fixture, odds, context = _auto_mode(["PL", "PD", "BL1", "SA", "FL1"])
+        fixture, odds, context = _auto_mode(["ALL"])
     else:
         fixture, odds, context = _manual_mode()
 

@@ -12,6 +12,7 @@ from football_ai.config import AsianOdds, EuropeanOdds, MatchFixture, OddsInput,
 
 
 LEAGUES = {
+    "ALL": "全部足球赛事",
     "PL": "英格兰足球超级联赛",
     "PD": "西班牙足球甲级联赛",
     "BL1": "德国足球甲级联赛",
@@ -23,6 +24,7 @@ LEAGUES = {
 
 
 MOCK_TEAMS: Dict[str, List[Tuple[str, str]]] = {
+    "ALL": [("Brazil", "Morocco"), ("Argentina", "France")],
     "PL": [("Arsenal FC", "Chelsea FC"), ("Liverpool FC", "Newcastle United FC")],
     "PD": [("Real Madrid CF", "Villarreal CF"), ("FC Barcelona", "Sevilla FC")],
     "BL1": [("FC Bayern München", "RB Leipzig"), ("Bayer 04 Leverkusen", "Eintracht Frankfurt")],

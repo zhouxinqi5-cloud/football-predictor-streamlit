@@ -68,7 +68,14 @@ class MatchFixture:
     def label(self) -> str:
         from football_ai.team_name_mapper import display_league_name, display_team_name
 
-        source = "真实 API" if self.source == "football-data" else "模拟示例" if self.source == "mock" else "手动输入"
+        source_labels = {
+            "football-data": "Football-Data 真实数据",
+            "thesportsdb": "TheSportsDB 真实数据",
+            "openligadb": "OpenLigaDB 真实数据",
+            "mock": "模拟示例",
+            "manual": "手动输入",
+        }
+        source = source_labels.get(self.source, self.source)
         return (
             f"{self.kickoff_time:%H:%M}｜{display_league_name(self.league, self.competition_code)}｜"
             f"{display_team_name(self.home_team)} vs {display_team_name(self.away_team)}｜{source}"

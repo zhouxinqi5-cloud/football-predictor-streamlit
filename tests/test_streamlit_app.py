@@ -11,7 +11,7 @@ class StreamlitAppTests(unittest.TestCase):
     def test_manual_report_without_api_keys(self):
         with patch.dict(
             os.environ,
-            {"FOOTBALL_DATA_API_KEY": "", "ODDS_API_KEY": ""},
+            {"FOOTBALL_DATA_API_KEY": "", "ODDS_API_KEY": "", "FOOTBALL_AI_DISABLE_EXTERNAL_APIS": "1"},
             clear=False,
         ):
             app = AppTest.from_file("app.py").run(timeout=20)
@@ -30,7 +30,7 @@ class StreamlitAppTests(unittest.TestCase):
     def test_mock_fixture_and_feature_workflow_without_api_key(self):
         with patch.dict(
             os.environ,
-            {"FOOTBALL_DATA_API_KEY": "", "ODDS_API_KEY": ""},
+            {"FOOTBALL_DATA_API_KEY": "", "ODDS_API_KEY": "", "FOOTBALL_AI_DISABLE_EXTERNAL_APIS": "1"},
             clear=False,
         ):
             app = AppTest.from_file("app.py").run(timeout=20)

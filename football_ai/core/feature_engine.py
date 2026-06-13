@@ -66,7 +66,8 @@ class FeatureEngine:
     @staticmethod
     def _date(match: Dict) -> datetime:
         value = match.get("utcDate") or "1970-01-01T00:00:00Z"
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
     @staticmethod
     def _match_values(match: Dict, team_id: int) -> Tuple[bool, int, int, Optional[int]]:
@@ -207,8 +208,14 @@ class FeatureEngine:
     def analyze(self, fixture: MatchFixture, context: Optional[MatchContext] = None) -> FeatureAnalysis:
         context = context or MatchContext()
         try:
-            home_data, away_data = self.api.datasets(fixture) if fixture.source == "football-data" else self.mock.datasets(fixture)
-            source = "Football-Data API + quantitative proxies" if fixture.source == "football-data" else "deterministic mock + quantitative proxies"
+            is_real_source = fixture.source in {"football-data", "thesportsdb", "openligadb"}
+            home_data, away_data = self.api.datasets(fixture) if is_real_source else self.mock.datasets(fixture)
+            source_labels = {
+                "football-data": "Football-Data API",
+                "thesportsdb": "TheSportsDB free API",
+                "openligadb": "OpenLigaDB free API",
+            }
+            source = f"{source_labels.get(fixture.source, 'deterministic mock')} + quantitative proxies"
         except FootballDataError:
             home_data, away_data = self.mock.datasets(fixture)
             source = "deterministic mock fallback + quantitative proxies"

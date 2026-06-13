@@ -4,9 +4,10 @@
 
 ## 核心能力
 
-- 自动按日期和联赛读取比赛，优先使用 Football-Data.org 免费 API。
+- 自动按日期和联赛读取比赛，数据优先级为 Football-Data.org → TheSportsDB → OpenLigaDB → 模拟示例。
 - 默认查询当天比赛，并在页面显示当前查询日期。
-- 无 API Key、接口失败或当日无数据时自动使用确定性 mock 数据，同时明确提示“模拟示例数据，不是真实近期比赛”。
+- TheSportsDB 使用官方公开免费接口，OpenLigaDB 无需 Key；两者覆盖范围和返回数量可能有限。
+- 所有真实 API 都失败或没有覆盖时才使用确定性 mock 数据，同时明确提示“模拟示例数据，不是真实近期比赛”。
 - 常见国家队、五大联赛球队和赛事名称优先显示中文；未知英文名会标记“未翻译”。
 - 自动构建 Elo-like、最近 10 场、强弱对手修正、攻防、xG 代理、主客场、疲劳、旅行和排名压力特征。
 - 解读欧赔概率偏移、返还率、亚盘升降盘与水位组合、大小球预期变化。
@@ -33,7 +34,10 @@ football_ai/
     report_engine.py           完整流水线与中文报告
   team_name_mapper.py          球队与赛事中文名称映射
   data/
-    api_client.py              Football-Data API 适配器
+    api_client.py              多数据源兼容入口
+    football_data_client.py    Football-Data 赛程、积分榜和近期战绩
+    thesportsdb_client.py      TheSportsDB 免费备用源
+    openligadb_client.py       OpenLigaDB 德国联赛备用源
     mock_data.py               无 Key 离线数据与市场基线
   ui/
     app.py                     Streamlit 专业界面
@@ -72,11 +76,16 @@ ODDS_API_KEY=
 
 Football-Data 免费 Key 可在 [football-data.org](https://www.football-data.org/) 申请。`ODDS_API_KEY` 仅为后续付费赔率接口预留，当前不会强制调用。
 
+数据源说明：
+
+- [Football-Data.org v4](https://docs.football-data.org/general/v4/index.html)：优先源，需要免费 Key。
+- [TheSportsDB API](https://www.thesportsdb.com/api.php)：免费备用源，公共免费接口可能限制单次返回数量。
+- [OpenLigaDB](https://www.openligadb.de/)：无需 Key，目前作为部分德国联赛备用。
+
 Streamlit secrets 格式：
 
 ```toml
 FOOTBALL_DATA_API_KEY = "your_key"
-ODDS_API_KEY = ""
 ```
 
 不要提交 `.env` 或真实 secrets。
