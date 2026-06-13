@@ -4,6 +4,11 @@
 
 ## 当前功能
 
+- 按日期和联赛自动获取比赛列表，支持世界杯、五大联赛和欧冠。
+- 自动比赛使用 Football-Data API；无 Key、接口失败或当日无数据时使用稳定 mock 回退。
+- 自动计算近期状态、攻击、防守、主客场修正、14 天疲劳指数和积分压力指数。
+- 自动输出主客队基本面分、强度差和 `home/away/even` 倾向。
+- 从当日比赛生成 Top 5 分析优先列表，区分强弱差与波动代理。
 - 手动输入球队、比赛背景、伤停、战意、欧赔、亚盘和大小球。
 - 使用 Football-Data.org v4 API 自动获取赛事球队、赛程、积分榜、近 5 场和进失球。
 - 自动数据只用于辅助填充基本面，伤停、战意和赔率仍由用户确认。
@@ -58,6 +63,8 @@ python -m unittest discover -s tests -v
 
 自动获取时建议使用 API 官方英文球队名，例如 `Arsenal FC`。免费套餐的赛事覆盖和请求频率可能有限；遇到权限、限流或球队匹配错误时，页面会保留手动输入流程。
 
+自动工作流：选择日期和联赛 → 自动获取比赛 → 选择比赛 → 自动生成基本面评分 → 手动检查盘口和其他信息 → 生成分析报告。自动填写后的全部输入仍可手动修改。
+
 ## API Key 配置
 
 程序按以下顺序读取配置：
@@ -108,6 +115,9 @@ app.py                              Streamlit 网页入口
 football_predictor/
   analysis_service.py              完整分析流水线
   data_fetcher.py                   Football-Data 免费数据客户端
+  fixture_fetcher.py                自动赛程与 mock 回退
+  feature_engine.py                 自动基本面特征工程
+  match_recommender.py              Top 5 分析优先级
   odds_fetcher.py                   付费赔率接口预留
   fundamental_analyzer.py           基本面分析
   odds_analyzer.py                  欧赔、亚盘和大小球分析
