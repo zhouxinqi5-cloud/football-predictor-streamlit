@@ -16,14 +16,16 @@ class StreamlitAppTests(unittest.TestCase):
         ):
             app = AppTest.from_file("app.py").run(timeout=20)
             self.assertEqual(len(app.exception), 0)
+            self.assertTrue(any("模拟示例数据，不是真实近期比赛" in warning.value for warning in app.warning))
+            self.assertTrue(any(button.label == "刷新今日比赛" for button in app.button))
             report_button = next(button for button in app.button if button.label == "生成分析报告")
             app = report_button.click().run(timeout=20)
 
         self.assertEqual(len(app.exception), 0)
         self.assertEqual(len(app.error), 0)
-        self.assertEqual(len(app.code), 1)
-        self.assertIn("足球比赛预测分析报告", app.code[0].value)
-        self.assertIn("不构成投注建议", app.code[0].value)
+        report_blocks = [code.value for code in app.code if "足球比赛预测分析报告" in code.value]
+        self.assertEqual(len(report_blocks), 1)
+        self.assertIn("不构成投注建议", report_blocks[0])
 
     def test_mock_fixture_and_feature_workflow_without_api_key(self):
         with patch.dict(
@@ -32,6 +34,7 @@ class StreamlitAppTests(unittest.TestCase):
             clear=False,
         ):
             app = AppTest.from_file("app.py").run(timeout=20)
+            self.assertTrue(any("模拟示例数据，不是真实近期比赛" in warning.value for warning in app.warning))
             fetch_button = next(button for button in app.button if button.label == "自动获取比赛")
             app = fetch_button.click().run(timeout=20)
             self.assertEqual(len(app.exception), 0)

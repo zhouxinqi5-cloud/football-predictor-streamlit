@@ -11,6 +11,7 @@ from football_ai.core.market_behavior import MarketBehaviorAnalysis, MarketBehav
 from football_ai.core.odds_engine import OddsAnalysis, OddsEngine
 from football_ai.core.probability_engine import ProbabilityAnalysis, ProbabilityEngine
 from football_ai.core.risk_engine import RiskAnalysis, RiskEngine
+from football_ai.team_name_mapper import display_league_name, display_team_name
 
 
 @dataclass(frozen=True)
@@ -44,14 +45,23 @@ class ReportEngine:
         trend = self._side(features.match_tendency)
         market_bias = self._side(market.market_bias)
         defensive = self._side(market.defensive_side)
+        home_name = display_team_name(fixture.home_team)
+        away_name = display_team_name(fixture.away_team)
+        league_name = display_league_name(fixture.league, fixture.competition_code)
+        if fixture.source == "football-data":
+            fixture_source = "Football-Data API（真实赛程数据）"
+        elif fixture.source == "manual":
+            fixture_source = "用户手动输入；基本面统计可能使用离线计算代理"
+        else:
+            fixture_source = "模拟示例数据，不是真实近期比赛"
         return f"""# Pro Football Analytics Engine 足球比赛预测分析报告
 
 ## 1. 比赛信息
-- 对阵：{fixture.home_team} vs {fixture.away_team}
-- 赛事：{fixture.league}（{fixture.competition_code}）
+- 对阵：{home_name} vs {away_name}
+- 赛事：{league_name}（{fixture.competition_code}）
 - 开球时间：{fixture.kickoff_time:%Y-%m-%d %H:%M %Z}
 - 中立场：{neutral}
-- 比赛数据来源：{fixture.source}
+- 比赛数据来源：{fixture_source}
 
 ## 2. 基本面对比
 - 主队综合力量：{features.home_power_score:.1f}/100

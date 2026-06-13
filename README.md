@@ -5,7 +5,9 @@
 ## 核心能力
 
 - 自动按日期和联赛读取比赛，优先使用 Football-Data.org 免费 API。
-- 无 API Key、接口失败或当日无数据时自动使用确定性 mock 数据。
+- 默认查询当天比赛，并在页面显示当前查询日期。
+- 无 API Key、接口失败或当日无数据时自动使用确定性 mock 数据，同时明确提示“模拟示例数据，不是真实近期比赛”。
+- 常见国家队、五大联赛球队和赛事名称优先显示中文；未知英文名会标记“未翻译”。
 - 自动构建 Elo-like、最近 10 场、强弱对手修正、攻防、xG 代理、主客场、疲劳、旅行和排名压力特征。
 - 解读欧赔概率偏移、返还率、亚盘升降盘与水位组合、大小球预期变化。
 - 计算热门拥挤度、市场防守方向、风险对冲、诱盘指标和控盘倾向代理。
@@ -29,6 +31,7 @@ football_ai/
     probability_engine.py      概率融合与比分分布
     risk_engine.py             多因素风险模型
     report_engine.py           完整流水线与中文报告
+  team_name_mapper.py          球队与赛事中文名称映射
   data/
     api_client.py              Football-Data API 适配器
     mock_data.py               无 Key 离线数据与市场基线

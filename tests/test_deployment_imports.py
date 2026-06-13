@@ -10,6 +10,7 @@ class DeploymentImportTests(unittest.TestCase):
             "football_ai.config",
             "football_ai.data.api_client",
             "football_ai.data.mock_data",
+            "football_ai.team_name_mapper",
             "football_ai.core.match_loader",
             "football_ai.core.feature_engine",
             "football_ai.core.odds_engine",

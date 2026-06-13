@@ -12,13 +12,13 @@ from football_ai.config import AsianOdds, EuropeanOdds, MatchFixture, OddsInput,
 
 
 LEAGUES = {
-    "PL": "Premier League",
-    "PD": "La Liga",
-    "BL1": "Bundesliga",
-    "SA": "Serie A",
-    "FL1": "Ligue 1",
-    "CL": "Champions League",
-    "WC": "World Cup",
+    "PL": "英格兰足球超级联赛",
+    "PD": "西班牙足球甲级联赛",
+    "BL1": "德国足球甲级联赛",
+    "SA": "意大利足球甲级联赛",
+    "FL1": "法国足球甲级联赛",
+    "CL": "欧洲冠军联赛",
+    "WC": "世界杯",
 }
 
 

@@ -18,9 +18,10 @@ from football_ai.config import (
     TeamMotivation,
     TotalsOdds,
 )
-from football_ai.core.match_loader import MatchLoader
+from football_ai.core.match_loader import MatchLoadResult, MatchLoader
 from football_ai.core.report_engine import ProAnalysisResult, ProFootballAnalyticsEngine
 from football_ai.data.mock_data import LEAGUES, MockDataProvider
+from football_ai.team_name_mapper import display_league_name, display_team_name
 
 
 load_dotenv()
@@ -36,10 +37,11 @@ def _secret(name: str) -> str:
         return ""
 
 
-def _initialize() -> None:
+def _initialize(api_key: str) -> None:
     defaults = {
         "pro_fixtures": [],
         "pro_fixture": None,
+        "pro_load_result": None,
         "pro_result": None,
         "pro_show_report": False,
         "pro_top_results": [],
@@ -47,8 +49,13 @@ def _initialize() -> None:
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
-    if st.session_state.pro_fixture is None:
-        st.session_state.pro_fixture = MockDataProvider().fixtures(date.today(), ["PL"])[0]
+    if st.session_state.pro_load_result is None:
+        load_result = MatchLoader(api_key=api_key or None).load_with_status(
+            date.today(), ["PL", "PD", "BL1", "SA", "FL1"]
+        )
+        st.session_state.pro_load_result = load_result
+        st.session_state.pro_fixtures = load_result.fixtures
+        st.session_state.pro_fixture = load_result.fixtures[0]
 
 
 def _odds_inputs(defaults: OddsInput, prefix: str) -> OddsInput:
@@ -146,7 +153,9 @@ def _analyze(fixture: MatchFixture, odds: OddsInput, context: MatchContext) -> P
 
 
 def _render_result(result: ProAnalysisResult, show_report: bool) -> None:
-    st.subheader(f"{result.fixture.home_team} vs {result.fixture.away_team}")
+    home_name = display_team_name(result.fixture.home_team)
+    away_name = display_team_name(result.fixture.away_team)
+    st.subheader(f"{home_name} vs {away_name}")
     columns = st.columns(4)
     columns[0].metric("主队基本面", f"{result.features.home_power_score:.1f}", f"{result.features.strength_gap:+.1f}")
     columns[1].metric("客队基本面", f"{result.features.away_power_score:.1f}")
@@ -172,39 +181,54 @@ def _render_result(result: ProAnalysisResult, show_report: bool) -> None:
         st.download_button(
             "下载分析报告",
             result.report,
-            file_name=f"{result.fixture.home_team}_vs_{result.fixture.away_team}.md",
+            file_name=f"{home_name}_vs_{away_name}.md",
             mime="text/markdown",
         )
 
 
 def _auto_mode(competition_codes: Iterable[str]) -> tuple[MatchFixture, OddsInput, MatchContext]:
-    columns = st.columns([2, 3, 2])
+    columns = st.columns([2, 3, 2, 2])
     target_date = columns[0].date_input("比赛日期", date.today(), key="auto_date")
     selected_codes = columns[1].multiselect(
         "联赛筛选",
         options=list(LEAGUES),
         default=list(competition_codes),
-        format_func=lambda code: f"{code} · {LEAGUES[code]}",
+        format_func=lambda code: f"{LEAGUES[code]}（{code}）",
         key="auto_codes",
     )
     fetch_clicked = columns[2].button("自动获取比赛", type="primary", width="stretch")
-    if fetch_clicked:
+    refresh_today = columns[3].button("刷新今日比赛", width="stretch")
+    query_date = date.today() if refresh_today else target_date
+    st.markdown(f"**当前查询日期：{query_date:%Y-%m-%d}**")
+    if fetch_clicked or refresh_today:
         with st.spinner("正在读取赛程；API 不可用时自动切换 mock 数据..."):
-            fixtures = MatchLoader(api_key=_secret("FOOTBALL_DATA_API_KEY") or None).load(target_date, selected_codes or ["PL"])
-        st.session_state.pro_fixtures = fixtures
-        st.session_state.pro_fixture = fixtures[0]
+            load_result = MatchLoader(api_key=_secret("FOOTBALL_DATA_API_KEY") or None).load_with_status(
+                query_date, selected_codes or ["PL"]
+            )
+        st.session_state.pro_load_result = load_result
+        st.session_state.pro_fixtures = load_result.fixtures
+        st.session_state.pro_fixture = load_result.fixtures[0]
         st.session_state.pro_result = None
         st.session_state.pro_show_report = False
+        st.session_state.pro_top_results = []
 
     fixtures = st.session_state.pro_fixtures
+    load_result: MatchLoadResult = st.session_state.pro_load_result
+    if load_result.is_real_data:
+        st.success(
+            f"当前使用真实 API 数据。查询日期：{load_result.target_date:%Y-%m-%d}，"
+            f"共获取 {len(load_result.fixtures)} 场比赛。"
+        )
+    else:
+        if load_result.api_configured and load_result.fallback_reason:
+            st.error(f"Football-Data API 请求失败：{load_result.fallback_reason}")
+        st.warning("当前使用的是模拟示例数据，不是真实近期比赛。")
+        st.caption(f"模拟数据对应查询日期：{load_result.target_date:%Y-%m-%d}，仅用于演示模型流程。")
     if fixtures:
         fixture = st.selectbox("选择比赛", fixtures, format_func=lambda item: item.label, key="auto_fixture")
         st.session_state.pro_fixture = fixture
-        source_name = "Football-Data API" if fixture.source == "football-data" else "离线 mock fallback"
-        st.info(f"已加载 {len(fixtures)} 场比赛，当前来源：{source_name}")
     else:
         fixture = st.session_state.pro_fixture
-        st.info("尚未拉取赛程。当前使用可运行的离线示例，点击“自动获取比赛”可按日期刷新。")
 
     mock_odds = MockDataProvider().odds(fixture)
     with st.expander("盘口输入（自动模式默认使用可编辑 mock 市场基线）", expanded=False):
@@ -231,7 +255,7 @@ def _auto_mode(competition_codes: Iterable[str]) -> tuple[MatchFixture, OddsInpu
         st.dataframe(
             [
                 {
-                    "比赛": f"{item.fixture.home_team} vs {item.fixture.away_team}",
+                    "比赛": f"{display_team_name(item.fixture.home_team)} vs {display_team_name(item.fixture.away_team)}",
                     "基本面差": item.features.strength_gap,
                     "主/平/客": f"{item.probability.home_win:.1f}/{item.probability.draw:.1f}/{item.probability.away_win:.1f}",
                     "风险": f"{item.risk.risk_level} {item.risk.risk_score:.0f}",
@@ -247,14 +271,14 @@ def _auto_mode(competition_codes: Iterable[str]) -> tuple[MatchFixture, OddsInpu
 
 def _manual_mode() -> tuple[MatchFixture, OddsInput, MatchContext]:
     columns = st.columns(2)
-    home_team = columns[0].text_input("主队", "Brazil")
-    away_team = columns[1].text_input("客队", "Morocco")
+    home_team = columns[0].text_input("主队", "巴西")
+    away_team = columns[1].text_input("客队", "摩洛哥")
     columns = st.columns(4)
     match_date = columns[0].date_input("日期", date.today(), key="manual_date")
     match_time = columns[1].time_input("时间", time(20, 0))
     competition = columns[2].selectbox("比赛类型", ["联赛", "小组赛", "淘汰赛", "友谊赛"])
     neutral = columns[3].checkbox("中立场")
-    league = st.text_input("赛事名称", "Manual Competition")
+    league = st.text_input("赛事名称", "手动比赛")
     fixture = MatchFixture(
         match_id=f"manual-{home_team}-{away_team}-{match_date}",
         home_team=home_team,
@@ -263,7 +287,7 @@ def _manual_mode() -> tuple[MatchFixture, OddsInput, MatchContext]:
         competition_code="MANUAL",
         kickoff_time=datetime.combine(match_date, match_time),
         neutral_ground=neutral,
-        source="mock",
+        source="manual",
         home_team_id=1,
         away_team_id=2,
     )
@@ -281,12 +305,17 @@ def _manual_mode() -> tuple[MatchFixture, OddsInput, MatchContext]:
 
 def main() -> None:
     st.set_page_config(page_title="Pro Football Analytics Engine", page_icon="⚽", layout="wide")
-    _initialize()
+    api_key = _secret("FOOTBALL_DATA_API_KEY")
+    _initialize(api_key)
     st.title("Pro Football Analytics Engine")
     st.caption("职业级足球量化分析系统 · API + 计算 · 无网页爬虫 · 无付费服务强依赖")
     st.warning("仅用于数据分析、概率研究和学习，不构成投注建议，不保证预测准确率。")
-    api_status = "已配置" if _secret("FOOTBALL_DATA_API_KEY") else "未配置，将自动使用 mock fallback"
+    api_status = "已配置，优先读取真实赛程" if api_key else "未配置，当前只能使用模拟示例数据"
     st.sidebar.markdown(f"**Football-Data API：** {api_status}")
+    if not api_key:
+        st.sidebar.warning("要读取真实比赛，请在 Streamlit Cloud Secrets 或 .env 中配置：")
+        st.sidebar.code('FOOTBALL_DATA_API_KEY = "你的 API Key"', language="toml")
+        st.sidebar.caption("配置后重新启动应用，再点击“刷新今日比赛”。")
     st.sidebar.caption("ODDS_API_KEY 为后续接口预留；当前赔率支持手动输入或离线基线。")
 
     mode = st.radio("分析模式", ["自动模式", "手动模式"], horizontal=True)

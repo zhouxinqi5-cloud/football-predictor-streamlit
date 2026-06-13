@@ -66,10 +66,12 @@ class MatchFixture:
 
     @property
     def label(self) -> str:
-        source = "API" if self.source == "football-data" else "MOCK"
+        from football_ai.team_name_mapper import display_league_name, display_team_name
+
+        source = "真实 API" if self.source == "football-data" else "模拟示例" if self.source == "mock" else "手动输入"
         return (
-            f"{self.kickoff_time:%H:%M}｜{self.league}｜"
-            f"{self.home_team} vs {self.away_team}｜{source}"
+            f"{self.kickoff_time:%H:%M}｜{display_league_name(self.league, self.competition_code)}｜"
+            f"{display_team_name(self.home_team)} vs {display_team_name(self.away_team)}｜{source}"
         )
 
 
