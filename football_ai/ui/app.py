@@ -212,7 +212,7 @@ def _render_result(result: ProAnalysisResult, show_report: bool) -> None:
 
 def _auto_mode(
     competition_codes: Iterable[str],
-) -> tuple[Optional[MatchFixture], Optional[OddsInput], Optional[MatchContext]]:
+) -> tuple[Optional[MatchFixture], Optional[OddsInput], Optional[MatchContext] | dict]:
     columns = st.columns([2, 3, 2, 2])
     target_date = columns[0].date_input("比赛日期", date.today(), key="auto_date")
     selected_codes = columns[1].multiselect(
@@ -240,8 +240,18 @@ def _auto_mode(
         st.session_state.pro_show_report = False
         st.session_state.pro_top_results = []
 
-    fixtures = st.session_state.pro_fixtures
+    fixtures = list(st.session_state.get("pro_fixtures") or [])
+    st.session_state.pro_fixtures = fixtures
     load_result: MatchLoadResult = st.session_state.pro_load_result
+    if len(fixtures) == 0:
+        st.warning(
+            "当前没有获取到比赛数据。请检查 Football-Data API Key、日期、赛事选择，或切换到手动模式。"
+        )
+        st.info("如果没有配置 API Key，当前不会显示真实比赛。可以使用手动输入模式继续分析。")
+        st.session_state.pro_fixture = None
+        st.session_state.pro_top_results = []
+        return None, None, {}
+
     if load_result.is_real_data:
         source_labels = {
             "football-data": "Football-Data.org",
@@ -267,38 +277,27 @@ def _auto_mode(
             st.warning("当前未配置 Football-Data API Key，使用模拟数据或手动输入模式。")
         st.warning("当前使用的是模拟示例数据，不是真实近期比赛。")
         st.caption(f"模拟数据对应查询日期：{load_result.target_date:%Y-%m-%d}，仅用于演示模型流程。")
-    if fixtures:
-        st.dataframe(
-            [
-                {
-                    "比赛时间": item.kickoff_time.strftime("%Y-%m-%d %H:%M"),
-                    "赛事": display_league_name(item.league, item.competition_code),
-                    "主队": display_team_name(item.home_team),
-                    "客队": display_team_name(item.away_team),
-                    "数据来源": {
-                        "football-data": "Football-Data.org",
-                        "thesportsdb": "TheSportsDB",
-                        "openligadb": "OpenLigaDB",
-                        "mock": "模拟示例",
-                    }.get(item.source, item.source),
-                }
-                for item in fixtures
-            ],
-            width="stretch",
-            hide_index=True,
-        )
-        fixture = st.selectbox("选择比赛", fixtures, format_func=lambda item: item.label, key="auto_fixture")
-        st.session_state.pro_fixture = fixture
-    else:
-        st.warning("当前没有获取到真实比赛数据，请检查 API Key、日期或赛事选择。")
-        st.info("请切换到“手动模式”输入比赛，或调整日期和赛事后重新刷新。")
-        fixture = st.session_state.pro_fixture
-        if fixture is None:
-            fallback = MockDataProvider().fixtures(query_date, ["ALL"])
-            if not fallback:
-                return None, None, None
-            fixture = fallback[0]
-            st.session_state.pro_fixture = fixture
+    st.dataframe(
+        [
+            {
+                "比赛时间": item.kickoff_time.strftime("%Y-%m-%d %H:%M"),
+                "赛事": display_league_name(item.league, item.competition_code),
+                "主队": display_team_name(item.home_team),
+                "客队": display_team_name(item.away_team),
+                "数据来源": {
+                    "football-data": "Football-Data.org",
+                    "thesportsdb": "TheSportsDB",
+                    "openligadb": "OpenLigaDB",
+                    "mock": "模拟示例",
+                }.get(item.source, item.source),
+            }
+            for item in fixtures
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+    fixture = st.selectbox("选择比赛", fixtures, format_func=lambda item: item.label, key="auto_fixture")
+    st.session_state.pro_fixture = fixture
 
     mock_odds = MockDataProvider().odds(fixture)
     if not load_result.is_real_data:
@@ -307,24 +306,30 @@ def _auto_mode(
     with st.expander("手动输入赔率、亚盘和大小球", expanded=False):
         odds = _odds_inputs(mock_odds, "auto")
     context = _context_inputs("auto")
-    if fixtures and st.button("自动生成基本面评分", width="stretch"):
+    if st.button("自动生成基本面评分", width="stretch"):
         with st.spinner("正在构建 Elo-like、近期状态、攻防、疲劳与动机特征..."):
             st.session_state.pro_result = _analyze(fixture, odds, context)
         st.session_state.pro_show_report = False
         st.success("自动基本面已生成，并完成盘口、市场行为、概率与风险模型计算。")
 
-    if len(fixtures) > 0:
-        top_n_max = min(5, len(fixtures))
-        top_n = st.slider("Top N 分析数量", 1, top_n_max, min(3, top_n_max))
-        if st.button("一键分析 Top N 比赛", width="stretch"):
-            results = []
-            with st.spinner("正在批量计算..."):
-                for candidate in fixtures[:top_n]:
-                    results.append(_analyze(candidate, MockDataProvider().odds(candidate), MatchContext()))
-            st.session_state.pro_top_results = sorted(
-                results,
-                key=lambda item: (item.risk.recommendation_grade, item.risk.risk_score, -abs(item.features.strength_gap)),
-            )
+    # The empty-list guard above returns before this block, so both bounds are always >= 1.
+    top_n_max = min(5, len(fixtures))
+    default_top_n = min(3, top_n_max)
+    top_n = st.slider(
+        "Top N 分析数量",
+        min_value=1,
+        max_value=top_n_max,
+        value=default_top_n,
+    )
+    if st.button("一键分析 Top N 比赛", width="stretch"):
+        results = []
+        with st.spinner("正在批量计算..."):
+            for candidate in fixtures[:top_n]:
+                results.append(_analyze(candidate, MockDataProvider().odds(candidate), MatchContext()))
+        st.session_state.pro_top_results = sorted(
+            results,
+            key=lambda item: (item.risk.recommendation_grade, item.risk.risk_score, -abs(item.features.strength_gap)),
+        )
     if st.session_state.pro_top_results:
         st.dataframe(
             [
@@ -400,7 +405,7 @@ def main() -> None:
     else:
         fixture, odds, context = _manual_mode()
 
-    can_analyze = fixture is not None and odds is not None and context is not None
+    can_analyze = fixture is not None and odds is not None and isinstance(context, MatchContext)
     if st.button("生成分析报告", type="primary", width="stretch", disabled=not can_analyze):
         with st.spinner("正在运行完整量化分析链路..."):
             st.session_state.pro_result = _analyze(fixture, odds, context)

@@ -8,6 +8,26 @@ from streamlit.testing.v1 import AppTest
 
 
 class StreamlitAppTests(unittest.TestCase):
+    def test_manual_mode_generates_report_when_automatic_fixtures_are_empty(self):
+        environment = {
+            "FOOTBALL_DATA_API_KEY": "",
+            "ODDS_API_KEY": "",
+            "FOOTBALL_AI_DISABLE_EXTERNAL_APIS": "1",
+        }
+        with patch.dict(os.environ, environment, clear=False), patch(
+            "football_ai.data.mock_data.MockDataProvider.fixtures",
+            return_value=[],
+        ):
+            app = AppTest.from_file("app.py").run(timeout=20)
+            mode = next(radio for radio in app.radio if radio.label == "分析模式")
+            app = mode.set_value("手动模式").run(timeout=20)
+            report_button = next(button for button in app.button if button.label == "生成分析报告")
+            self.assertFalse(report_button.disabled)
+            app = report_button.click().run(timeout=20)
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertTrue(any("足球比赛预测分析报告" in code.value for code in app.code))
+
     def test_empty_fixture_list_never_creates_invalid_top_n_slider(self):
         environment = {
             "FOOTBALL_DATA_API_KEY": "",
@@ -23,7 +43,10 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(len(app.exception), 0)
         self.assertFalse(any(slider.label == "Top N 分析数量" for slider in app.slider))
         self.assertTrue(
-            any("当前没有获取到真实比赛数据" in warning.value for warning in app.warning)
+            any("当前没有获取到比赛数据" in warning.value for warning in app.warning)
+        )
+        self.assertTrue(
+            any("可以使用手动输入模式继续分析" in info.value for info in app.info)
         )
         report_button = next(button for button in app.button if button.label == "生成分析报告")
         self.assertTrue(report_button.disabled)
