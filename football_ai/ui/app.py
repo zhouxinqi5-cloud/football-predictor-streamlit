@@ -1,0 +1,309 @@
+"""Streamlit interface for the professional football analytics engine."""
+
+from __future__ import annotations
+
+import os
+from datetime import date, datetime, time
+from typing import Iterable, Optional
+
+import streamlit as st
+from dotenv import load_dotenv
+
+from football_ai.config import (
+    AsianOdds,
+    EuropeanOdds,
+    MatchContext,
+    MatchFixture,
+    OddsInput,
+    TeamMotivation,
+    TotalsOdds,
+)
+from football_ai.core.match_loader import MatchLoader
+from football_ai.core.report_engine import ProAnalysisResult, ProFootballAnalyticsEngine
+from football_ai.data.mock_data import LEAGUES, MockDataProvider
+
+
+load_dotenv()
+
+
+def _secret(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if value:
+        return value
+    try:
+        return str(st.secrets.get(name, "")).strip()
+    except Exception:
+        return ""
+
+
+def _initialize() -> None:
+    defaults = {
+        "pro_fixtures": [],
+        "pro_fixture": None,
+        "pro_result": None,
+        "pro_show_report": False,
+        "pro_top_results": [],
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+    if st.session_state.pro_fixture is None:
+        st.session_state.pro_fixture = MockDataProvider().fixtures(date.today(), ["PL"])[0]
+
+
+def _odds_inputs(defaults: OddsInput, prefix: str) -> OddsInput:
+    st.markdown("**欧赔（初盘 / 即时盘）**")
+    columns = st.columns(6)
+    labels = ("初主", "初平", "初客", "即主", "即平", "即客")
+    values = (
+        defaults.european_opening.home,
+        defaults.european_opening.draw,
+        defaults.european_opening.away,
+        defaults.european_current.home,
+        defaults.european_current.draw,
+        defaults.european_current.away,
+    )
+    european = [
+        column.number_input(label, min_value=1.01, max_value=30.0, value=float(value), step=0.01, key=f"{prefix}_eu_{index}")
+        for index, (column, label, value) in enumerate(zip(columns, labels, values))
+    ]
+    st.markdown("**亚盘（负数表示主让）**")
+    columns = st.columns(6)
+    asian_labels = ("初盘口", "初主水", "初客水", "即盘口", "即主水", "即客水")
+    asian_values = (
+        defaults.asian_opening.handicap,
+        defaults.asian_opening.home_water,
+        defaults.asian_opening.away_water,
+        defaults.asian_current.handicap,
+        defaults.asian_current.home_water,
+        defaults.asian_current.away_water,
+    )
+    asian = [
+        column.number_input(label, min_value=-3.0 if index in (0, 3) else 0.5, max_value=3.0 if index in (0, 3) else 1.5, value=float(value), step=0.01, key=f"{prefix}_ah_{index}")
+        for index, (column, label, value) in enumerate(zip(columns, asian_labels, asian_values))
+    ]
+    st.markdown("**大小球**")
+    columns = st.columns(6)
+    total_labels = ("初盘口", "初大水", "初小水", "即盘口", "即大水", "即小水")
+    total_values = (
+        defaults.totals_opening.line,
+        defaults.totals_opening.over_water,
+        defaults.totals_opening.under_water,
+        defaults.totals_current.line,
+        defaults.totals_current.over_water,
+        defaults.totals_current.under_water,
+    )
+    totals = [
+        column.number_input(label, min_value=0.0 if index in (0, 3) else 0.5, max_value=6.0 if index in (0, 3) else 1.5, value=float(value), step=0.01, key=f"{prefix}_ou_{index}")
+        for index, (column, label, value) in enumerate(zip(columns, total_labels, total_values))
+    ]
+    return OddsInput(
+        european_opening=EuropeanOdds(*european[:3]),
+        european_current=EuropeanOdds(*european[3:]),
+        asian_opening=AsianOdds(*asian[:3]),
+        asian_current=AsianOdds(*asian[3:]),
+        totals_opening=TotalsOdds(*totals[:3]),
+        totals_current=TotalsOdds(*totals[3:]),
+        source="manual / editable baseline",
+    )
+
+
+def _context_inputs(prefix: str) -> MatchContext:
+    with st.expander("赛程、旅行与战意修正", expanded=False):
+        columns = st.columns(2)
+        home_travel = columns[0].number_input("主队旅行距离（公里）", 0.0, 20000.0, 0.0, 50.0, key=f"{prefix}_home_travel")
+        away_travel = columns[1].number_input("客队旅行距离（公里）", 0.0, 20000.0, 300.0, 50.0, key=f"{prefix}_away_travel")
+        known = st.checkbox("战意信息已人工确认", key=f"{prefix}_motivation_known")
+        final_group = st.checkbox("小组赛最后一轮", key=f"{prefix}_final_group")
+        knockout = st.checkbox("淘汰赛", key=f"{prefix}_knockout")
+        if known:
+            st.caption("以下指数为 0-100，仅用于表达压力强度。")
+            values = []
+            for side in ("主队", "客队"):
+                columns = st.columns(3)
+                values.append(tuple(
+                    column.slider(f"{side}{label}", 0, 100, 50, key=f"{prefix}_{side}_{index}")
+                    for index, (column, label) in enumerate(zip(columns, ("争冠压力", "保级压力", "出线压力")))
+                ))
+            home_motivation = TeamMotivation(*values[0], certainty=80)
+            away_motivation = TeamMotivation(*values[1], certainty=80)
+        else:
+            home_motivation = TeamMotivation()
+            away_motivation = TeamMotivation()
+    return MatchContext(
+        home_motivation=home_motivation,
+        away_motivation=away_motivation,
+        home_travel_km=home_travel,
+        away_travel_km=away_travel,
+        motivation_known=known,
+        final_group_round=final_group,
+        knockout_match=knockout,
+    )
+
+
+def _analyze(fixture: MatchFixture, odds: OddsInput, context: MatchContext) -> ProAnalysisResult:
+    return ProFootballAnalyticsEngine(api_key=_secret("FOOTBALL_DATA_API_KEY") or None).analyze(fixture, odds, context)
+
+
+def _render_result(result: ProAnalysisResult, show_report: bool) -> None:
+    st.subheader(f"{result.fixture.home_team} vs {result.fixture.away_team}")
+    columns = st.columns(4)
+    columns[0].metric("主队基本面", f"{result.features.home_power_score:.1f}", f"{result.features.strength_gap:+.1f}")
+    columns[1].metric("客队基本面", f"{result.features.away_power_score:.1f}")
+    columns[2].metric("风险等级", result.risk.risk_level, f"{result.risk.risk_score:.1f}/100")
+    columns[3].metric("推荐等级", result.risk.recommendation_grade, "分析清晰度")
+
+    st.markdown("**胜平负概率**")
+    for label, value in (
+        ("主胜", result.probability.home_win),
+        ("平局", result.probability.draw),
+        ("客胜", result.probability.away_win),
+    ):
+        left, right = st.columns([1, 5])
+        left.write(f"{label} {value:.2f}%")
+        right.progress(int(round(value)))
+    columns = st.columns(3)
+    columns[0].metric("市场方向", result.market.market_bias.upper())
+    columns[1].metric("热门拥挤度", f"{result.market.public_money:.0f}/100")
+    columns[2].metric("诱盘指标", f"{result.market.trap_indicator:.0f}/100")
+    st.caption("市场方向与诱盘指标均为公开赔率结构的计算代理，不代表真实资金流或庄家内部意图。")
+    if show_report:
+        st.code(result.report, language="markdown")
+        st.download_button(
+            "下载分析报告",
+            result.report,
+            file_name=f"{result.fixture.home_team}_vs_{result.fixture.away_team}.md",
+            mime="text/markdown",
+        )
+
+
+def _auto_mode(competition_codes: Iterable[str]) -> tuple[MatchFixture, OddsInput, MatchContext]:
+    columns = st.columns([2, 3, 2])
+    target_date = columns[0].date_input("比赛日期", date.today(), key="auto_date")
+    selected_codes = columns[1].multiselect(
+        "联赛筛选",
+        options=list(LEAGUES),
+        default=list(competition_codes),
+        format_func=lambda code: f"{code} · {LEAGUES[code]}",
+        key="auto_codes",
+    )
+    fetch_clicked = columns[2].button("自动获取比赛", type="primary", width="stretch")
+    if fetch_clicked:
+        with st.spinner("正在读取赛程；API 不可用时自动切换 mock 数据..."):
+            fixtures = MatchLoader(api_key=_secret("FOOTBALL_DATA_API_KEY") or None).load(target_date, selected_codes or ["PL"])
+        st.session_state.pro_fixtures = fixtures
+        st.session_state.pro_fixture = fixtures[0]
+        st.session_state.pro_result = None
+        st.session_state.pro_show_report = False
+
+    fixtures = st.session_state.pro_fixtures
+    if fixtures:
+        fixture = st.selectbox("选择比赛", fixtures, format_func=lambda item: item.label, key="auto_fixture")
+        st.session_state.pro_fixture = fixture
+        source_name = "Football-Data API" if fixture.source == "football-data" else "离线 mock fallback"
+        st.info(f"已加载 {len(fixtures)} 场比赛，当前来源：{source_name}")
+    else:
+        fixture = st.session_state.pro_fixture
+        st.info("尚未拉取赛程。当前使用可运行的离线示例，点击“自动获取比赛”可按日期刷新。")
+
+    mock_odds = MockDataProvider().odds(fixture)
+    with st.expander("盘口输入（自动模式默认使用可编辑 mock 市场基线）", expanded=False):
+        odds = _odds_inputs(mock_odds, "auto")
+    context = _context_inputs("auto")
+    if fixtures and st.button("自动生成基本面评分", width="stretch"):
+        with st.spinner("正在构建 Elo-like、近期状态、攻防、疲劳与动机特征..."):
+            st.session_state.pro_result = _analyze(fixture, odds, context)
+        st.session_state.pro_show_report = False
+        st.success("自动基本面已生成，并完成盘口、市场行为、概率与风险模型计算。")
+
+    if fixtures:
+        top_n = st.slider("Top N 分析数量", 1, min(5, len(fixtures)), min(3, len(fixtures)))
+        if st.button("一键分析 Top N 比赛", width="stretch"):
+            results = []
+            with st.spinner("正在批量计算..."):
+                for candidate in fixtures[:top_n]:
+                    results.append(_analyze(candidate, MockDataProvider().odds(candidate), MatchContext()))
+            st.session_state.pro_top_results = sorted(
+                results,
+                key=lambda item: (item.risk.recommendation_grade, item.risk.risk_score, -abs(item.features.strength_gap)),
+            )
+    if st.session_state.pro_top_results:
+        st.dataframe(
+            [
+                {
+                    "比赛": f"{item.fixture.home_team} vs {item.fixture.away_team}",
+                    "基本面差": item.features.strength_gap,
+                    "主/平/客": f"{item.probability.home_win:.1f}/{item.probability.draw:.1f}/{item.probability.away_win:.1f}",
+                    "风险": f"{item.risk.risk_level} {item.risk.risk_score:.0f}",
+                    "等级": item.risk.recommendation_grade,
+                }
+                for item in st.session_state.pro_top_results
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+    return fixture, odds, context
+
+
+def _manual_mode() -> tuple[MatchFixture, OddsInput, MatchContext]:
+    columns = st.columns(2)
+    home_team = columns[0].text_input("主队", "Brazil")
+    away_team = columns[1].text_input("客队", "Morocco")
+    columns = st.columns(4)
+    match_date = columns[0].date_input("日期", date.today(), key="manual_date")
+    match_time = columns[1].time_input("时间", time(20, 0))
+    competition = columns[2].selectbox("比赛类型", ["联赛", "小组赛", "淘汰赛", "友谊赛"])
+    neutral = columns[3].checkbox("中立场")
+    league = st.text_input("赛事名称", "Manual Competition")
+    fixture = MatchFixture(
+        match_id=f"manual-{home_team}-{away_team}-{match_date}",
+        home_team=home_team,
+        away_team=away_team,
+        league=league,
+        competition_code="MANUAL",
+        kickoff_time=datetime.combine(match_date, match_time),
+        neutral_ground=neutral,
+        source="mock",
+        home_team_id=1,
+        away_team_id=2,
+    )
+    st.text_area("伤停情况（记录用途，当前量化模型不自动解析自然语言）", "暂无完整伤停信息")
+    st.text_area("战意描述（记录用途；下方指数用于模型计算）", "战意待确认")
+    odds = _odds_inputs(MockDataProvider().odds(fixture), "manual")
+    context = _context_inputs("manual")
+    if competition == "小组赛":
+        context = MatchContext(**{**context.__dict__, "final_group_round": context.final_group_round})
+    elif competition == "淘汰赛":
+        context = MatchContext(**{**context.__dict__, "knockout_match": True})
+    st.session_state.pro_fixture = fixture
+    return fixture, odds, context
+
+
+def main() -> None:
+    st.set_page_config(page_title="Pro Football Analytics Engine", page_icon="⚽", layout="wide")
+    _initialize()
+    st.title("Pro Football Analytics Engine")
+    st.caption("职业级足球量化分析系统 · API + 计算 · 无网页爬虫 · 无付费服务强依赖")
+    st.warning("仅用于数据分析、概率研究和学习，不构成投注建议，不保证预测准确率。")
+    api_status = "已配置" if _secret("FOOTBALL_DATA_API_KEY") else "未配置，将自动使用 mock fallback"
+    st.sidebar.markdown(f"**Football-Data API：** {api_status}")
+    st.sidebar.caption("ODDS_API_KEY 为后续接口预留；当前赔率支持手动输入或离线基线。")
+
+    mode = st.radio("分析模式", ["自动模式", "手动模式"], horizontal=True)
+    if mode == "自动模式":
+        fixture, odds, context = _auto_mode(["PL", "PD", "BL1", "SA", "FL1"])
+    else:
+        fixture, odds, context = _manual_mode()
+
+    if st.button("生成分析报告", type="primary", width="stretch"):
+        with st.spinner("正在运行完整量化分析链路..."):
+            st.session_state.pro_result = _analyze(fixture, odds, context)
+        st.session_state.pro_show_report = True
+
+    result: Optional[ProAnalysisResult] = st.session_state.pro_result
+    if result is not None:
+        _render_result(result, st.session_state.pro_show_report)
+
+
+if __name__ == "__main__":
+    main()
