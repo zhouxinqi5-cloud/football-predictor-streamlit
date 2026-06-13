@@ -8,6 +8,26 @@ from streamlit.testing.v1 import AppTest
 
 
 class StreamlitAppTests(unittest.TestCase):
+    def test_empty_fixture_list_never_creates_invalid_top_n_slider(self):
+        environment = {
+            "FOOTBALL_DATA_API_KEY": "",
+            "ODDS_API_KEY": "",
+            "FOOTBALL_AI_DISABLE_EXTERNAL_APIS": "1",
+        }
+        with patch.dict(os.environ, environment, clear=False), patch(
+            "football_ai.data.mock_data.MockDataProvider.fixtures",
+            return_value=[],
+        ):
+            app = AppTest.from_file("app.py").run(timeout=20)
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertFalse(any(slider.label == "Top N 分析数量" for slider in app.slider))
+        self.assertTrue(
+            any("当前没有获取到真实比赛数据" in warning.value for warning in app.warning)
+        )
+        report_button = next(button for button in app.button if button.label == "生成分析报告")
+        self.assertTrue(report_button.disabled)
+
     def test_manual_report_without_api_keys(self):
         with patch.dict(
             os.environ,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import date, datetime, time
 from typing import Iterable, Optional
 
@@ -42,6 +43,23 @@ def _match_loader(api_key: str) -> MatchLoader:
     return MatchLoader(api_key=api_key or None, enable_fallback_apis=not disabled)
 
 
+def _ensure_fixture_fallback(load_result: MatchLoadResult, competition_codes: Iterable[str]) -> MatchLoadResult:
+    """Repair empty provider responses and stale Streamlit sessions with explicit mock data."""
+    if load_result.fixtures:
+        return load_result
+    codes = tuple(competition_codes) or ("ALL",)
+    mock_fixtures = MockDataProvider().fixtures(load_result.target_date, codes)
+    reason = load_result.fallback_reason or "所有真实数据源均未返回比赛"
+    failures = load_result.failures + ("真实比赛列表为空，已切换模拟示例数据",)
+    return replace(
+        load_result,
+        fixtures=mock_fixtures,
+        source="mock",
+        fallback_reason=reason,
+        failures=failures,
+    )
+
+
 def _initialize(api_key: str) -> None:
     defaults = {
         "pro_fixtures": [],
@@ -54,11 +72,14 @@ def _initialize(api_key: str) -> None:
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
-    if st.session_state.pro_load_result is None:
-        load_result = _match_loader(api_key).load_with_status(date.today(), ["ALL"])
+    if st.session_state.pro_load_result is None or not st.session_state.pro_fixtures:
+        load_result = _ensure_fixture_fallback(
+            _match_loader(api_key).load_with_status(date.today(), ["ALL"]),
+            ["ALL"],
+        )
         st.session_state.pro_load_result = load_result
         st.session_state.pro_fixtures = load_result.fixtures
-        st.session_state.pro_fixture = load_result.fixtures[0]
+        st.session_state.pro_fixture = load_result.fixtures[0] if load_result.fixtures else None
 
 
 def _odds_inputs(defaults: OddsInput, prefix: str) -> OddsInput:
@@ -189,7 +210,9 @@ def _render_result(result: ProAnalysisResult, show_report: bool) -> None:
         )
 
 
-def _auto_mode(competition_codes: Iterable[str]) -> tuple[MatchFixture, OddsInput, MatchContext]:
+def _auto_mode(
+    competition_codes: Iterable[str],
+) -> tuple[Optional[MatchFixture], Optional[OddsInput], Optional[MatchContext]]:
     columns = st.columns([2, 3, 2, 2])
     target_date = columns[0].date_input("比赛日期", date.today(), key="auto_date")
     selected_codes = columns[1].multiselect(
@@ -205,12 +228,14 @@ def _auto_mode(competition_codes: Iterable[str]) -> tuple[MatchFixture, OddsInpu
     st.markdown(f"**当前查询日期：{query_date:%Y-%m-%d}**")
     if fetch_clicked or refresh_today:
         with st.spinner("正在读取赛程；API 不可用时自动切换 mock 数据..."):
-            load_result = _match_loader(_secret("FOOTBALL_DATA_API_KEY")).load_with_status(
-                query_date, selected_codes or ["PL"]
+            fallback_codes = selected_codes or ["ALL"]
+            load_result = _ensure_fixture_fallback(
+                _match_loader(_secret("FOOTBALL_DATA_API_KEY")).load_with_status(query_date, fallback_codes),
+                fallback_codes,
             )
         st.session_state.pro_load_result = load_result
         st.session_state.pro_fixtures = load_result.fixtures
-        st.session_state.pro_fixture = load_result.fixtures[0]
+        st.session_state.pro_fixture = load_result.fixtures[0] if load_result.fixtures else None
         st.session_state.pro_result = None
         st.session_state.pro_show_report = False
         st.session_state.pro_top_results = []
@@ -235,10 +260,11 @@ def _auto_mode(competition_codes: Iterable[str]) -> tuple[MatchFixture, OddsInpu
                 for failure in load_result.failures:
                     st.write(f"- {failure}")
     else:
+        st.warning("当前没有获取到真实比赛数据，请检查 API Key、日期或赛事选择。")
         if load_result.api_configured and load_result.fallback_reason:
             st.error(f"真实 API 获取失败：{load_result.fallback_reason}")
         elif not load_result.api_configured:
-            st.warning("当前未配置免费 API Key，且免费备用接口未返回比赛，正在使用模拟数据。")
+            st.warning("当前未配置 Football-Data API Key，使用模拟数据或手动输入模式。")
         st.warning("当前使用的是模拟示例数据，不是真实近期比赛。")
         st.caption(f"模拟数据对应查询日期：{load_result.target_date:%Y-%m-%d}，仅用于演示模型流程。")
     if fixtures:
@@ -264,10 +290,21 @@ def _auto_mode(competition_codes: Iterable[str]) -> tuple[MatchFixture, OddsInpu
         fixture = st.selectbox("选择比赛", fixtures, format_func=lambda item: item.label, key="auto_fixture")
         st.session_state.pro_fixture = fixture
     else:
+        st.warning("当前没有获取到真实比赛数据，请检查 API Key、日期或赛事选择。")
+        st.info("请切换到“手动模式”输入比赛，或调整日期和赛事后重新刷新。")
         fixture = st.session_state.pro_fixture
+        if fixture is None:
+            fallback = MockDataProvider().fixtures(query_date, ["ALL"])
+            if not fallback:
+                return None, None, None
+            fixture = fallback[0]
+            st.session_state.pro_fixture = fixture
 
     mock_odds = MockDataProvider().odds(fixture)
-    with st.expander("盘口输入（自动模式默认使用可编辑 mock 市场基线）", expanded=False):
+    if not load_result.is_real_data:
+        st.info("没有真实 API 基本面时，系统将使用 mock_data 自动生成基础评分；也可切换手动模式自行输入球队和比赛背景。")
+    st.info("赔率、亚盘、大小球需要手动输入；当前未接入付费赔率 API。下方预填值仅为可编辑的模型示例基线。")
+    with st.expander("手动输入赔率、亚盘和大小球", expanded=False):
         odds = _odds_inputs(mock_odds, "auto")
     context = _context_inputs("auto")
     if fixtures and st.button("自动生成基本面评分", width="stretch"):
@@ -276,8 +313,9 @@ def _auto_mode(competition_codes: Iterable[str]) -> tuple[MatchFixture, OddsInpu
         st.session_state.pro_show_report = False
         st.success("自动基本面已生成，并完成盘口、市场行为、概率与风险模型计算。")
 
-    if fixtures:
-        top_n = st.slider("Top N 分析数量", 1, min(5, len(fixtures)), min(3, len(fixtures)))
+    if len(fixtures) > 0:
+        top_n_max = min(5, len(fixtures))
+        top_n = st.slider("Top N 分析数量", 1, top_n_max, min(3, top_n_max))
         if st.button("一键分析 Top N 比赛", width="stretch"):
             results = []
             with st.spinner("正在批量计算..."):
@@ -349,6 +387,7 @@ def main() -> None:
     api_status = "已配置，优先读取真实赛程" if api_key else "未配置，将尝试 TheSportsDB / OpenLigaDB 免费备用源"
     st.sidebar.markdown(f"**Football-Data API：** {api_status}")
     if not api_key:
+        st.sidebar.warning("当前未配置 Football-Data API Key，使用模拟数据或手动输入模式。免费备用源可用时会优先显示真实比赛。")
         st.sidebar.warning("建议配置免费 Key，以获得更完整的赛程、积分榜和近期战绩：")
         st.sidebar.code('FOOTBALL_DATA_API_KEY = "你的 API Key"', language="toml")
         st.sidebar.caption("配置后重新启动应用，再点击“刷新今日比赛”。")
@@ -361,7 +400,8 @@ def main() -> None:
     else:
         fixture, odds, context = _manual_mode()
 
-    if st.button("生成分析报告", type="primary", width="stretch"):
+    can_analyze = fixture is not None and odds is not None and context is not None
+    if st.button("生成分析报告", type="primary", width="stretch", disabled=not can_analyze):
         with st.spinner("正在运行完整量化分析链路..."):
             st.session_state.pro_result = _analyze(fixture, odds, context)
         st.session_state.pro_show_report = True

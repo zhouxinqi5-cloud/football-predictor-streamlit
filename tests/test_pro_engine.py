@@ -5,11 +5,12 @@ import unittest
 from unittest.mock import patch
 
 from football_ai.config import MatchContext
-from football_ai.core.match_loader import MatchLoader
+from football_ai.core.match_loader import MatchLoadResult, MatchLoader
 from football_ai.core.report_engine import ProFootballAnalyticsEngine
 from football_ai.data.mock_data import MockDataProvider
 from football_ai.data.thesportsdb_client import TheSportsDBClient
 from football_ai.team_name_mapper import display_league_name, display_team_name
+from football_ai.ui.app import _ensure_fixture_fallback
 from football_predictor.data_fetcher import FootballDataError
 
 
@@ -94,6 +95,14 @@ class ProEngineTests(unittest.TestCase):
         self.assertEqual(len(fixtures), 1)
         self.assertEqual(fixtures[0].source, "thesportsdb")
         self.assertEqual(fixtures[0].home_team, "Arsenal FC")
+
+    def test_empty_provider_result_is_repaired_with_labeled_mock_data(self):
+        empty = MatchLoadResult([], date(2026, 6, 13), "thesportsdb", False)
+        repaired = _ensure_fixture_fallback(empty, ["PL"])
+
+        self.assertTrue(repaired.fixtures)
+        self.assertEqual(repaired.source, "mock")
+        self.assertTrue(all(item.source == "mock" for item in repaired.fixtures))
 
 
 if __name__ == "__main__":
